@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-test('google maps directions from LA to SF', async ({ page }) => {
+test('google maps directions from LA to SF', { annotation: { type: 'instanceId', description: '1877220' } }, async ({ page }) => {
   // Navigate to Google Maps
   await page.goto('https://www.google.com/maps?hl=en');
 
