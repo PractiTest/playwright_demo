@@ -14,6 +14,7 @@ interface PractiTestConfig {
   email: string;
   apiToken: string;
   projectId: string;
+  suiteId?: string;
 }
 
 class PractiTestReporter implements Reporter {
@@ -44,6 +45,7 @@ class PractiTestReporter implements Reporter {
           email: jsonConfig.email || '',
           apiToken: jsonConfig.apiToken || '',
           projectId: jsonConfig.projectId || '',
+          suiteId: jsonConfig.suite_id || '',
         };
       } catch (error) {
         console.warn('[PractiTest] Warning: Failed to parse practitest.config.json, falling back to environment variables');
@@ -56,6 +58,7 @@ class PractiTestReporter implements Reporter {
       email: process.env.PRACTITEST_EMAIL || '',
       apiToken: process.env.PRACTITEST_API_TOKEN || '',
       projectId: process.env.PRACTITEST_PROJECT_ID || '',
+      suiteId: process.env.PRACTITEST_SUITE_ID || '',
     };
   }
 
@@ -69,13 +72,6 @@ class PractiTestReporter implements Reporter {
     const instanceIdAnnotation = test.annotations.find(
       (annotation) => annotation.type === 'instanceId'
     );
-
-    if (!instanceIdAnnotation || !instanceIdAnnotation.description) {
-      console.log(`[PractiTest] Test "${test.title}" - No instance ID found, skipping upload`);
-      return;
-    }
-
-    const instanceId = instanceIdAnnotation.description;
 
     // Map Playwright status to PractiTest status
     let status: string;
@@ -106,7 +102,18 @@ class PractiTestReporter implements Reporter {
     }
 
     // Upload to PractiTest and track the promise
-    const uploadPromise = this.uploadRun(instanceId, status, duration, notes, test.title);
+    let uploadPromise: Promise<void>;
+
+    if (instanceIdAnnotation && instanceIdAnnotation.description) {
+      // Use regular create run API (runs.json) with instance ID
+      const instanceId = instanceIdAnnotation.description;
+      uploadPromise = this.uploadRun('runs.json', instanceId, status, duration, notes, test.title);
+    } else {
+      // Use auto-create run API (runs/auto_create.json)
+      console.log(`[PractiTest] Test "${test.title}" - No instance ID found, using auto-create run`);
+      uploadPromise = this.uploadRun('runs/auto_create.json', undefined, status, duration, notes, test.title);
+    }
+
     this.pendingUploads.push(uploadPromise);
     await uploadPromise;
   }
@@ -121,7 +128,8 @@ class PractiTestReporter implements Reporter {
   }
 
   private async uploadRun(
-    instanceId: string,
+    endpoint: string,
+    instanceId: string | undefined,
     status: string,
     duration: string,
     notes: string,
@@ -132,20 +140,49 @@ class PractiTestReporter implements Reporter {
       return;
     }
 
-    const url = `${this.config.baseUrl}/api/v2/projects/${this.config.projectId}/runs.json`;
+    const url = `${this.config.baseUrl}/api/v2/projects/${this.config.projectId}/${endpoint}`;
 
-    const body = {
-      data: {
-        type: 'runs',
-        attributes: {
-          'instance-id': parseInt(instanceId),
-          'exit-code': status === 'PASSED' ? 0 : 1,
-          status: status,
-          duration: duration,
-          notes: notes,
-        },
-      },
+    // Build body with common attributes
+    const attributes: any = {
+      'exit-code': status === 'PASSED' ? 0 : 1,
+      status: status,
+      duration: duration,
+      notes: notes,
     };
+
+    let body: any;
+
+    // Add specific attributes based on whether we have an instance ID or using auto-create
+    if (instanceId) {
+      // Regular run with instance ID
+      attributes['instance-id'] = parseInt(instanceId);
+      body = {
+        data: {
+          type: 'runs',
+          attributes: attributes,
+        },
+      };
+    } else {
+      // Auto-create run with test name and suite ID
+      if (!this.config.suiteId) {
+        console.error(`[PractiTest] ✗ Cannot use auto-create for "${testTitle}" - suite_id not configured`);
+        return;
+      }
+      attributes['set-id'] = parseInt(this.config.suiteId);
+      body = {
+        data: {
+          type: 'runs',
+          attributes: attributes,
+          'test-attributes': {
+            'name': testTitle,
+            'author-id': 25,
+            'status': 'Ready'
+          },
+        },
+      };
+    }
+
+    // console.log(`[PractiTest] Request body:`, JSON.stringify(body, null, 2));
 
     try {
       const response = await fetch(url, {
@@ -159,7 +196,11 @@ class PractiTestReporter implements Reporter {
 
       if (response.ok) {
         const data = await response.json();
-        console.log(`[PractiTest] ✓ Uploaded result for "${testTitle}" (Instance: ${instanceId}, Status: ${status})`);
+        if (instanceId) {
+          console.log(`[PractiTest] ✓ Uploaded result for "${testTitle}" (Instance: ${instanceId}, Status: ${status})`);
+        } else {
+          console.log(`[PractiTest] ✓ Auto-created and uploaded result for "${testTitle}" (Status: ${status})`);
+        }
         // console.log(`[PractiTest] Response data:`, JSON.stringify(data, null, 2));
       } else {
         const errorText = await response.text();

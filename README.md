@@ -74,9 +74,11 @@ This will install Playwright and all required dependencies.
      "baseUrl": "https://api.practitest.com",
      "email": "your-email@example.com",
      "apiToken": "your-api-token-here",
-     "projectId": "your-project-id"
+     "projectId": "your-project-id",
+     "suite_id": "your-suite-id"
    }
    ```
+**Note:** `suite_id` is required only if you don't specify the instance-id in the tests.
 **Note:** The `practitest.config.json` file is gitignored to protect your credentials.
 
 ## Running Tests
@@ -94,17 +96,33 @@ npx playwright test --headed
 
 ## Test Annotations
 
-To enable automatic result reporting to PractiTest, add an `instanceId` annotation to your tests:
+The reporter supports two ways to report test results to PractiTest:
+
+### Option 1: With Instance ID (Regular Run)
+
+Add an `instanceId` annotation to report to an existing test instance:
 
 ```typescript
-test('test name', {
+test('google maps directions from LA to SF', {
   annotation: { type: 'instanceId', description: '1877220' }
 }, async ({ page }) => {
   // Your test code here
 });
 ```
 
-The `instanceId` corresponds to the test instance ID in PractiTest where results should be uploaded.
+The reporter uses the [Create a Run API](https://www.practitest.com/api-v2/#create-a-run) endpoint (`runs.json`).
+
+### Option 2: Without Instance ID (Auto-Create Run)
+
+Tests without an `instanceId` annotation will use auto-create:
+
+```typescript
+test('google maps directions from NYC to Atlanta', async ({ page }) => {
+  // Your test code here
+});
+```
+
+The reporter uses the [Auto-Create a Run API](https://www.practitest.com/api-v2/#auto-create-a-run) endpoint (`runs/auto_create.json`), which automatically finds or creates the test and instance. **Requires `suite_id` in configuration.**
 
 ## Project Structure
 
@@ -117,6 +135,12 @@ The `instanceId` corresponds to the test instance ID in PractiTest where results
 
 When tests complete, the custom PractiTest reporter:
 1. Reads test results and annotations
-2. Maps Playwright test statuses to PractiTest statuses
-3. Uploads results to PractiTest API with test duration and notes
+2. Maps Playwright test statuses to PractiTest statuses:
+   - `passed` → `PASSED`
+   - `failed` → `FAILED`
+   - `timedOut` → `BLOCKED`
+   - `skipped` → `NOT COMPLETED`
+3. Uploads results to PractiTest API:
+   - **With instanceId**: Uses `runs.json` endpoint with the specified instance id
+   - **Without instanceId**: Uses `runs/auto_create.json` endpoint to automatically create test and instance if required (uses test name)
 4. Logs success/failure of each upload
